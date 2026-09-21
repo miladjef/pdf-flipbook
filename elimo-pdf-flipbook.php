@@ -1,11 +1,10 @@
 <?php
 /**
- * Plugin Name: ELIMO PDF Flipbook
- * Plugin URI: https://elimo.ch/
+ * Plugin Name: PDF Flipbook
  * Description: Responsive online PDF flipbook and viewer for WordPress with shortcodes, thumbnails, zoom, fullscreen, swipe navigation and shareable standalone catalog pages.
  * Version: 1.0.4
  * Author: Milad Jafari Gavzan
- * Text Domain: elimo-pdf-flipbook
+ * Text Domain: pdf-flipbook
  * Requires at least: 6.0
  * Requires PHP: 7.4
  */
