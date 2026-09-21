@@ -3,8 +3,22 @@
 if(typeof window.pdfjsLib!=='undefined' && window.EPF_CONFIG){window.pdfjsLib.GlobalWorkerOptions.workerSrc=EPF_CONFIG.workerUrl;}
 const clamp=(n,min,max)=>Math.max(min,Math.min(max,n));
 class EPFViewer{
-  constructor(root){this.root=root;this.url=root.dataset.pdf;this.mode=root.dataset.mode||'flipbook';this.page=parseInt(root.dataset.start||'1',10)||1;this.pdf=null;this.zoom=1;this.renderToken=0;this.cache=new Map();this.mobile=window.matchMedia('(max-width:820px)');this.touchStart=null;this.thumbBuilt=false;this.bind();this.load();}
+  constructor(root){this.root=root;this.url=this.normalizeUrl(root.dataset.pdf);this.fallbackUrl=this.normalizeUrl(root.dataset.fallbackPdf||'');this.mode=root.dataset.mode||'flipbook';this.page=parseInt(root.dataset.start||'1',10)||1;this.pdf=null;this.zoom=1;this.renderToken=0;this.cache=new Map();this.mobile=window.matchMedia('(max-width:820px)');this.touchStart=null;this.thumbBuilt=false;this.bind();this.load();}
   q(s){return this.root.querySelector(s)} qa(s){return [...this.root.querySelectorAll(s)]}
+  normalizeUrl(url){
+    if(!url)return '';
+    try{
+      const u=new URL(url,location.href),here=new URL(location.href);
+      const norm=h=>String(h||'').replace(/^www\./i,'').toLowerCase();
+      if(norm(u.hostname)===norm(here.hostname)&&u.pathname.indexOf('/wp-content/uploads/')!==-1){u.protocol=here.protocol;u.host=here.host;}
+      return u.href;
+    }catch(e){return url;}
+  }
+  async waitForPdfJs(timeout=8000){
+    const started=Date.now();
+    while(typeof window.pdfjsLib==='undefined' && Date.now()-started<timeout){await new Promise(r=>setTimeout(r,60));}
+    return typeof window.pdfjsLib!=='undefined';
+  }
   bind(){
     this.qa('.epf-prev,.epf-side-prev,.epf-prev-mobile').forEach(b=>b.addEventListener('click',()=>this.prev()));
     this.qa('.epf-next,.epf-side-next,.epf-next-mobile').forEach(b=>b.addEventListener('click',()=>this.next()));
@@ -20,10 +34,32 @@ class EPFViewer{
   }
   debounce(fn,ms){let t;return()=>{clearTimeout(t);t=setTimeout(fn,ms)}}
   async load(){
-    if(!window.pdfjsLib){this.fail('PDF.js is not available.');return;}
-    try{const task=pdfjsLib.getDocument({url:this.url,withCredentials:false});task.onProgress=p=>{if(p.total){const pct=Math.round(p.loaded/p.total*100);this.q('.epf-loading-progress').textContent=pct+'%';}};this.pdf=await task.promise;this.page=clamp(this.page,1,this.pdf.numPages);this.q('.epf-total').textContent=this.pdf.numPages;this.q('.epf-mobile-total').textContent=this.pdf.numPages;await this.render();this.q('.epf-loading').classList.add('is-done');setTimeout(()=>{this.q('.epf-loading').style.display='none'},280);this.prefetch();}catch(e){console.error('ELIMO PDF Flipbook:',e);this.fail();}
+    const ready=await this.waitForPdfJs();
+    if(!ready){this.fail('PDF.js is not available.');return;}
+    if(window.EPF_CONFIG&&EPF_CONFIG.workerUrl)window.pdfjsLib.GlobalWorkerOptions.workerSrc=EPF_CONFIG.workerUrl;
+    const sources=[this.url];
+    if(this.fallbackUrl&&this.fallbackUrl!==this.url)sources.push(this.fallbackUrl);
+    let lastError=null;
+    for(const source of sources){
+      try{
+        const task=pdfjsLib.getDocument({url:source,withCredentials:false,isEvalSupported:false,rangeChunkSize:65536});
+        task.onProgress=p=>{if(p.total){const pct=Math.round(p.loaded/p.total*100);const prog=this.q('.epf-loading-progress');if(prog)prog.textContent=pct+'%';}};
+        this.pdf=await task.promise;
+        this.url=source;
+        this.page=clamp(this.page,1,this.pdf.numPages);
+        this.q('.epf-total').textContent=this.pdf.numPages;
+        this.q('.epf-mobile-total').textContent=this.pdf.numPages;
+        await this.render();
+        this.q('.epf-loading').classList.add('is-done');
+        setTimeout(()=>{const l=this.q('.epf-loading');if(l)l.style.display='none'},280);
+        this.prefetch();
+        return;
+      }catch(e){lastError=e;console.warn('ELIMO PDF Flipbook source failed:',source,e);}
+    }
+    console.error('ELIMO PDF Flipbook:',lastError);
+    this.fail(lastError&&lastError.message?lastError.message:'');
   }
-  fail(){const l=this.q('.epf-loading');if(l)l.style.display='none';this.q('.epf-error').hidden=false;}
+  fail(message=''){const l=this.q('.epf-loading');if(l)l.style.display='none';const err=this.q('.epf-error');if(err){err.hidden=false;if(message){const d=err.querySelector('.epf-error-detail');if(d){d.textContent=message;d.hidden=false;}}}}
   isSingle(){return this.mode==='single'||this.mobile.matches;}
   normalizePage(p){p=clamp(p,1,this.pdf?this.pdf.numPages:1);if(!this.isSingle()&&p>1&&p%2===0)p-=1;return p;}
   spread(){const p=this.normalizePage(this.page);if(this.isSingle())return [null,p];if(p===1)return [null,1];return [p,p+1<=this.pdf.numPages?p+1:null];}

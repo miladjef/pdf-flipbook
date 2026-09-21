@@ -31,11 +31,14 @@ class EPF_Admin {
     public static function source_box($post) {
         wp_nonce_field('epf_save_book', 'epf_nonce');
         $url = get_post_meta($post->ID, '_epf_pdf_url', true);
+        $attachment_id = (int)get_post_meta($post->ID, '_epf_pdf_id', true);
+        if (!$attachment_id && $url) $attachment_id = (int)attachment_url_to_postid($url);
         ?>
         <div class="epf-admin-source">
             <label for="epf_pdf_url"><strong><?php esc_html_e('PDF file', 'elimo-pdf-flipbook'); ?></strong></label>
             <div class="epf-media-row">
                 <input id="epf_pdf_url" name="epf_pdf_url" type="url" class="widefat" value="<?php echo esc_attr($url); ?>" placeholder="https://example.com/catalog.pdf">
+                <input id="epf_pdf_id" name="epf_pdf_id" type="hidden" value="<?php echo (int)$attachment_id; ?>">
                 <button type="button" class="button button-primary epf-select-pdf"><?php esc_html_e('Select PDF', 'elimo-pdf-flipbook'); ?></button>
             </div>
             <p class="description"><?php esc_html_e('For best performance, upload the PDF to this WordPress Media Library. Remote PDFs need CORS access.', 'elimo-pdf-flipbook'); ?></p>
@@ -82,6 +85,9 @@ class EPF_Admin {
         if (!current_user_can('edit_post',$post_id)) return;
         $url = isset($_POST['epf_pdf_url']) ? esc_url_raw(wp_unslash($_POST['epf_pdf_url'])) : '';
         update_post_meta($post_id, '_epf_pdf_url', $url);
+        $attachment_id = isset($_POST['epf_pdf_id']) ? absint($_POST['epf_pdf_id']) : 0;
+        if (!$attachment_id && $url) $attachment_id = (int)attachment_url_to_postid($url);
+        update_post_meta($post_id, '_epf_pdf_id', $attachment_id);
         update_post_meta($post_id, '_epf_mode', in_array($_POST['epf_mode'] ?? '',array('flipbook','single'),true)?sanitize_key($_POST['epf_mode']):'flipbook');
         update_post_meta($post_id, '_epf_height', max(420,min(1400,(int)($_POST['epf_height'] ?? 720))));
         update_post_meta($post_id, '_epf_start_page', max(1,(int)($_POST['epf_start_page'] ?? 1)));
@@ -119,7 +125,7 @@ class EPF_Admin {
     public static function settings_page(){ $o=epf_options(); ?>
         <div class="wrap epf-settings-page"><h1><?php esc_html_e('ELIMO PDF Flipbook Settings','elimo-pdf-flipbook'); ?></h1><form method="post" action="options.php"><?php settings_fields('epf_settings'); ?>
         <table class="form-table"><tbody>
-        <tr><th>PDF.js URL</th><td><input class="large-text" type="url" name="epf_options[pdfjs_url]" value="<?php echo esc_attr($o['pdfjs_url']); ?>"><p class="description">PDF rendering library URL.</p></td></tr>
+        <tr><th>PDF.js URL</th><td><input class="large-text" type="url" name="epf_options[pdfjs_url]" value="<?php echo esc_attr($o['pdfjs_url']); ?>"><p class="description">Bundled locally with the plugin for reliable loading.</p></td></tr>
         <tr><th>PDF.js Worker URL</th><td><input class="large-text" type="url" name="epf_options[worker_url]" value="<?php echo esc_attr($o['worker_url']); ?>"></td></tr>
         <tr><th><?php esc_html_e('Default height','elimo-pdf-flipbook'); ?></th><td><input type="number" name="epf_options[default_height]" value="<?php echo esc_attr($o['default_height']); ?>"> px</td></tr>
         <tr><th><?php esc_html_e('Default colors','elimo-pdf-flipbook'); ?></th><td><input class="epf-color" name="epf_options[default_background]" value="<?php echo esc_attr($o['default_background']); ?>"> <input class="epf-color" name="epf_options[default_accent]" value="<?php echo esc_attr($o['default_accent']); ?>"></td></tr>

@@ -32,3 +32,11 @@ A responsive online PDF viewer and flipbook for WordPress.
 5. Publish and copy the shortcode.
 
 PDF rendering uses PDF.js. By default the library loads from jsDelivr. The URLs can be changed under PDF Flipbooks > Settings.
+
+
+== 1.0.1 ==
+* Bundled PDF.js 3.11.174 locally to avoid CDN/CSP/optimization failures.
+* Added same-origin PDF streaming for Media Library attachments with byte-range support.
+* Added automatic www/non-www URL normalization and direct-file fallback.
+* Added attachment ID persistence when choosing PDFs from Media Library.
+* Improved viewer diagnostics when loading fails.
