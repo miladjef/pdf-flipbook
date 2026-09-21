@@ -6,7 +6,11 @@ class EPF_Frontend {
     public static function init(){
         add_shortcode('elimo_pdf',array(__CLASS__,'shortcode'));
         add_filter('the_content',array(__CLASS__,'single_content'));
+        // Keep the legacy front-end stream route for older cached markup.
         add_action('template_redirect',array(__CLASS__,'serve_local_pdf'),0);
+        // Primary stream route. admin-ajax.php is normally excluded from page cache/CDN HTML caching.
+        add_action('wp_ajax_epf_stream_pdf',array(__CLASS__,'serve_ajax_pdf'));
+        add_action('wp_ajax_nopriv_epf_stream_pdf',array(__CLASS__,'serve_ajax_pdf'));
     }
 
     private static function pdf_key($attachment_id) {
@@ -17,41 +21,67 @@ class EPF_Frontend {
         $attachment_id = absint($attachment_id);
         if (!$attachment_id) return '';
         return add_query_arg(array(
-            'epf_pdf_file' => $attachment_id,
-            'epf_key' => self::pdf_key($attachment_id),
-        ), home_url('/'));
+            'action' => 'epf_stream_pdf',
+            'id' => $attachment_id,
+            'key' => self::pdf_key($attachment_id),
+            'v' => EPF_VERSION,
+        ), admin_url('admin-ajax.php'));
+    }
+
+    public static function serve_ajax_pdf() {
+        $attachment_id = isset($_REQUEST['id']) ? absint(wp_unslash($_REQUEST['id'])) : 0;
+        $key = isset($_REQUEST['key']) ? sanitize_text_field(wp_unslash($_REQUEST['key'])) : '';
+        self::stream_pdf($attachment_id, $key);
     }
 
     public static function serve_local_pdf() {
         if (empty($_GET['epf_pdf_file'])) return;
         $attachment_id = absint(wp_unslash($_GET['epf_pdf_file']));
         $key = isset($_GET['epf_key']) ? sanitize_text_field(wp_unslash($_GET['epf_key'])) : '';
-        if (!$attachment_id || !$key || !hash_equals(self::pdf_key($attachment_id), $key)) {
+        self::stream_pdf($attachment_id, $key);
+    }
+
+    private static function stream_pdf($attachment_id, $key) {
+        $attachment_id = absint($attachment_id);
+        if (!$attachment_id || !$key || !hash_equals(self::pdf_key($attachment_id), (string)$key)) {
             status_header(403);
+            header('Content-Type: text/plain; charset=utf-8');
             exit('Forbidden');
         }
         if (get_post_mime_type($attachment_id) !== 'application/pdf') {
             status_header(404);
+            header('Content-Type: text/plain; charset=utf-8');
             exit('PDF not found');
         }
+
         $file = get_attached_file($attachment_id);
         $real = $file ? realpath($file) : false;
         $uploads = wp_get_upload_dir();
         $base = !empty($uploads['basedir']) ? realpath($uploads['basedir']) : false;
         if (!$real || !$base || !is_file($real) || strpos($real, $base . DIRECTORY_SEPARATOR) !== 0) {
             status_header(404);
+            header('Content-Type: text/plain; charset=utf-8');
             exit('PDF not found');
         }
 
-        $size = filesize($real);
-        if ($size === false || $size < 1) {
+        $size = @filesize($real);
+        if (!$size || $size < 1) {
             status_header(404);
+            header('Content-Type: text/plain; charset=utf-8');
             exit('PDF not found');
         }
+
+        // Avoid corrupting binary output through PHP/WordPress output compression.
+        if (function_exists('apache_setenv')) @apache_setenv('no-gzip', '1');
+        @ini_set('zlib.output_compression', 'Off');
+        @set_time_limit(0);
+        while (ob_get_level()) @ob_end_clean();
+
         $start = 0;
         $end = $size - 1;
         $status = 200;
-        if (!empty($_SERVER['HTTP_RANGE']) && preg_match('/bytes=(\d*)-(\d*)/i', sanitize_text_field(wp_unslash($_SERVER['HTTP_RANGE'])), $m)) {
+        $range = isset($_SERVER['HTTP_RANGE']) ? wp_unslash($_SERVER['HTTP_RANGE']) : '';
+        if ($range && preg_match('/bytes=(\d*)-(\d*)/i', $range, $m)) {
             if ($m[1] !== '') $start = max(0, (int)$m[1]);
             if ($m[2] !== '') $end = min($end, (int)$m[2]);
             if ($m[1] === '' && $m[2] !== '') {
@@ -66,29 +96,38 @@ class EPF_Frontend {
             }
             $status = 206;
         }
+
         $length = $end - $start + 1;
-        while (ob_get_level()) @ob_end_clean();
         status_header($status);
+        header_remove('Content-Type');
+        header_remove('Content-Encoding');
         header('Content-Type: application/pdf');
-        header('Content-Disposition: inline; filename="' . rawurlencode(sanitize_file_name(wp_basename($real))) . '"');
+        header('Content-Disposition: inline; filename="' . sanitize_file_name(wp_basename($real)) . '"');
         header('Accept-Ranges: bytes');
         header('Content-Length: ' . $length);
         header('X-Content-Type-Options: nosniff');
-        header('Cache-Control: public, max-age=3600');
+        header('Cache-Control: private, no-store, no-cache, must-revalidate, max-age=0');
+        header('Pragma: no-cache');
+        header('Expires: 0');
         if ($status === 206) header('Content-Range: bytes ' . $start . '-' . $end . '/' . $size);
 
-        $fp = fopen($real, 'rb');
-        if (!$fp) { status_header(500); exit('Unable to read PDF'); }
+        if (isset($_SERVER['REQUEST_METHOD']) && strtoupper($_SERVER['REQUEST_METHOD']) === 'HEAD') exit;
+
+        $fp = @fopen($real, 'rb');
+        if (!$fp) {
+            status_header(500);
+            exit('Unable to read PDF');
+        }
         if ($start > 0) fseek($fp, $start);
         $remaining = $length;
-        $chunk = 1024 * 1024;
+        $chunk = 1024 * 256;
         while ($remaining > 0 && !feof($fp)) {
             $read = min($chunk, $remaining);
             $buffer = fread($fp, $read);
             if ($buffer === false || $buffer === '') break;
             echo $buffer;
             $remaining -= strlen($buffer);
-            if (function_exists('fastcgi_finish_request')) { /* do not call: stream must continue */ }
+            if (connection_aborted()) break;
             flush();
         }
         fclose($fp);
@@ -104,7 +143,7 @@ class EPF_Frontend {
         wp_enqueue_script('epf-pdfjs',$pdfjs_url,array(),EPF_VERSION,true);
         wp_enqueue_style('epf-viewer',EPF_URL.'assets/css/viewer.css',array(),EPF_VERSION);
         wp_enqueue_script('epf-viewer',EPF_URL.'assets/js/viewer.js',array('epf-pdfjs'),EPF_VERSION,true);
-        wp_localize_script('epf-viewer','EPF_CONFIG',array('workerUrl'=>$worker_url,'strings'=>array(
+        wp_localize_script('epf-viewer','EPF_CONFIG',array('workerUrl'=>$worker_url,'ajaxUrl'=>admin_url('admin-ajax.php'),'strings'=>array(
             'loading'=>__('Loading PDF…','elimo-pdf-flipbook'),
             'error'=>__('The PDF could not be loaded.','elimo-pdf-flipbook'),
             'page'=>__('Page','elimo-pdf-flipbook'),

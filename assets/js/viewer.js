@@ -37,15 +37,16 @@ class EPFViewer{
     const ready=await this.waitForPdfJs();
     if(!ready){this.fail('PDF.js is not available.');return;}
     if(window.EPF_CONFIG&&EPF_CONFIG.workerUrl)window.pdfjsLib.GlobalWorkerOptions.workerSrc=EPF_CONFIG.workerUrl;
-    const sources=[this.url];
-    if(this.fallbackUrl&&this.fallbackUrl!==this.url)sources.push(this.fallbackUrl);
+    const attempts=[];
+    if(this.url)attempts.push({url:this.url,label:'stream'});
+    if(this.fallbackUrl&&this.fallbackUrl!==this.url)attempts.push({url:this.fallbackUrl,label:'direct'});
     let lastError=null;
-    for(const source of sources){
+    for(const attempt of attempts){
       try{
-        const task=pdfjsLib.getDocument({url:source,withCredentials:false,isEvalSupported:false,rangeChunkSize:65536});
+        const task=pdfjsLib.getDocument({url:attempt.url,withCredentials:true,isEvalSupported:false,rangeChunkSize:262144});
         task.onProgress=p=>{if(p.total){const pct=Math.round(p.loaded/p.total*100);const prog=this.q('.epf-loading-progress');if(prog)prog.textContent=pct+'%';}};
         this.pdf=await task.promise;
-        this.url=source;
+        this.url=attempt.url;
         this.page=clamp(this.page,1,this.pdf.numPages);
         this.q('.epf-total').textContent=this.pdf.numPages;
         this.q('.epf-mobile-total').textContent=this.pdf.numPages;
@@ -54,12 +55,34 @@ class EPFViewer{
         setTimeout(()=>{const l=this.q('.epf-loading');if(l)l.style.display='none'},280);
         this.prefetch();
         return;
-      }catch(e){lastError=e;console.warn('ELIMO PDF Flipbook source failed:',source,e);}
+      }catch(e){lastError=e;console.warn('ELIMO PDF Flipbook '+attempt.label+' source failed:',attempt.url,e);}
+    }
+    if(this.fallbackUrl){
+      try{
+        const r=await fetch(this.fallbackUrl,{method:'GET',credentials:'same-origin',cache:'no-store',redirect:'follow'});
+        if(!r.ok)throw new Error('PDF HTTP '+r.status);
+        const type=(r.headers.get('content-type')||'').toLowerCase();
+        const buf=await r.arrayBuffer();
+        if(buf.byteLength<5)throw new Error('Empty PDF response');
+        const sig=new Uint8Array(buf.slice(0,5));
+        const signature=String.fromCharCode.apply(null,sig);
+        if(signature!=='%PDF-')throw new Error('The server did not return a PDF file'+(type?' ('+type+')':''));
+        const task=pdfjsLib.getDocument({data:buf,isEvalSupported:false});
+        this.pdf=await task.promise;
+        this.page=clamp(this.page,1,this.pdf.numPages);
+        this.q('.epf-total').textContent=this.pdf.numPages;
+        this.q('.epf-mobile-total').textContent=this.pdf.numPages;
+        await this.render();
+        this.q('.epf-loading').classList.add('is-done');
+        setTimeout(()=>{const l=this.q('.epf-loading');if(l)l.style.display='none'},280);
+        this.prefetch();
+        return;
+      }catch(e){lastError=e;console.warn('ELIMO PDF Flipbook byte fallback failed:',e);}
     }
     console.error('ELIMO PDF Flipbook:',lastError);
     this.fail(lastError&&lastError.message?lastError.message:'');
   }
-  fail(message=''){const l=this.q('.epf-loading');if(l)l.style.display='none';const err=this.q('.epf-error');if(err){err.hidden=false;if(message){const d=err.querySelector('.epf-error-detail');if(d){d.textContent=message;d.hidden=false;}}}}
+  fail(message=''){const l=this.q('.epf-loading');if(l)l.style.display='none';const err=this.q('.epf-error');if(err){err.hidden=false;if(message){const d=err.querySelector('.epf-error-detail');if(d){d.textContent=message;d.hidden=false;}}const direct=err.querySelector('a');if(direct&&this.fallbackUrl)direct.href=this.fallbackUrl;}}
   isSingle(){return this.mode==='single'||this.mobile.matches;}
   normalizePage(p){p=clamp(p,1,this.pdf?this.pdf.numPages:1);if(!this.isSingle()&&p>1&&p%2===0)p-=1;return p;}
   spread(){const p=this.normalizePage(this.page);if(this.isSingle())return [null,p];if(p===1)return [null,1];return [p,p+1<=this.pdf.numPages?p+1:null];}
