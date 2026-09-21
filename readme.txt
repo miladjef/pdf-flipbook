@@ -40,3 +40,8 @@ PDF rendering uses PDF.js. By default the library loads from jsDelivr. The URLs 
 * Added automatic www/non-www URL normalization and direct-file fallback.
 * Added attachment ID persistence when choosing PDFs from Media Library.
 * Improved viewer diagnostics when loading fails.
+
+= 1.0.4 =
+* Restricts the full-file Firefox workaround to Firefox desktop only.
+* Adds a substantially more natural 3D page-turn animation with front/back page faces, fold lighting, edge shadow and smoother timing.
+* Keeps the lightweight mobile navigation behavior for performance.
